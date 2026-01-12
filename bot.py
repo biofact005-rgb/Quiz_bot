@@ -6,14 +6,27 @@ import os
 from datetime import datetime, time, timezone, timedelta
 from telegram import Update, Poll, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PollAnswerHandler
+from flask import Flask
+from threading import Thread
 
-# --- CONFIGURATION (SECURE MODE) ---
-# Token ab system environment se uthaya jayega (Koyeb Settings se)
+# --- RENDER WEB SERVER (KEEP ALIVE) ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is Running! 24/7"
+
+def run():
+    # Render ke liye dynamic port zaroori hai
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# --- CONFIGURATION ---
 TOKEN = os.getenv('TOKEN')
-
-if not TOKEN:
-    print("❌ ERROR: Bot Token nahi mila! Koyeb 'Environment Variables' check karein.")
-
 DB_FILE = 'database.json'
 DEV_USERNAME = '@errorkidk'
 
@@ -22,14 +35,13 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- DATABASE HANDLING (LOCAL FILE) ---
+# --- DATABASE HANDLING ---
 def load_db():
     default_db = {"questions": [], "groups": {}, "current_polls": {}, "scores": {}}
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, 'r') as f:
                 data = json.load(f)
-                # Auto-Fix Missing Keys
                 for key in default_db:
                     if key not in data: data[key] = default_db[key]
                 return data
@@ -48,23 +60,15 @@ db = load_db()
 # --- UI & INTRO ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🏆 Live Leaderboard", callback_data='leaderboard')],
-        [InlineKeyboardButton("📱 Active Groups", callback_data='active_groups')],
-        [InlineKeyboardButton("📝 Add Questions", callback_data='add_q'),
-         InlineKeyboardButton("📢 Group Setup", callback_data='reg_g')],
-        [InlineKeyboardButton("💾 Backup & Restore", callback_data='status')],
-        [InlineKeyboardButton("🚀 Start Cycle", callback_data='start_cycle')]
+        [InlineKeyboardButton("🏆 Leaderboard", callback_data='leaderboard'),
+         InlineKeyboardButton("📱 Active Groups", callback_data='active_groups')],
+        [InlineKeyboardButton("📝 Add Qs", callback_data='add_q'),
+         InlineKeyboardButton("📢 Register", callback_data='reg_g')],
+        [InlineKeyboardButton("💾 Backup", callback_data='status')],
+        [InlineKeyboardButton("🚀 Start Quiz", callback_data='start_cycle')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    intro_text = (
-        f"🌟 **Advance Quiz Bot (Secure)** 🌟\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"👑 **Creator:** {DEV_USERNAME}\n\n"
-        f"✅ **Public Safe:** Token Hidden hai.\n"
-        f"📂 **Data:** JSON File (Backup regularly!)\n"
-        f"👇 **Main Menu:**"
-    )
+    intro_text = f"🌟 **Render Quiz Bot** 🌟\n━━━━━━━━━━━━━━━━━━━━\n✅ **Status:** Online (24/7)\n⚠️ **Note:** Render restart hone par data ud sakta hai. **Backup** button use karte rahein.\n👇 **Main Menu:**"
     
     if update.callback_query:
         await update.callback_query.edit_message_text(intro_text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -75,11 +79,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    back_btn = [[InlineKeyboardButton("⬅️ Main Menu", callback_data='main_menu')]]
+    back_btn = [[InlineKeyboardButton("⬅️ Menu", callback_data='main_menu')]]
     
     if query.data == 'leaderboard':
         if "scores" not in db or not db["scores"]:
-            await query.edit_message_text("📉 No data yet.", reply_markup=InlineKeyboardMarkup(back_btn))
+            await query.edit_message_text("📉 No data.", reply_markup=InlineKeyboardMarkup(back_btn))
             return
         sorted_scores = sorted(db["scores"].values(), key=lambda x: x['correct'], reverse=True)[:10]
         text = "🏆 **TOP 10 PLAYERS** 🏆\n\n"
@@ -89,7 +93,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == 'active_groups':
         if not db["groups"]:
-            await query.edit_message_text("📱 No active groups.", reply_markup=InlineKeyboardMarkup(back_btn))
+            await query.edit_message_text("📱 No groups.", reply_markup=InlineKeyboardMarkup(back_btn))
             return
         text = "📱 **Active Groups:**\n\n"
         for _, data in db["groups"].items():
@@ -98,24 +102,17 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(back_btn), parse_mode='Markdown')
 
     elif query.data == 'add_q':
-        await query.edit_message_text("📥 **Add:** Forward questions from @QuizBot here.", reply_markup=InlineKeyboardMarkup(back_btn))
+        await query.edit_message_text("📥 **Add:** Forward questions from @QuizBot.", reply_markup=InlineKeyboardMarkup(back_btn))
     elif query.data == 'reg_g':
         await query.edit_message_text("📢 **Setup:** Group me `/register` likhein.", reply_markup=InlineKeyboardMarkup(back_btn))
-    
     elif query.data == 'status':
-        btns = [
-            [InlineKeyboardButton("📥 Download Backup", callback_data='get_backup')],
-            [InlineKeyboardButton("🗑 Clear All Data", callback_data='clear')],
-            [InlineKeyboardButton("⬅️ Back", callback_data='main_menu')]
-        ]
-        await query.edit_message_text(f"📊 **File Stats:**\nQuestions: `{len(db['questions'])}`", reply_markup=InlineKeyboardMarkup(btns), parse_mode='Markdown')
-
+        btns = [[InlineKeyboardButton("📥 Download Backup", callback_data='get_backup')], [InlineKeyboardButton("🗑 Clear All", callback_data='clear')], [InlineKeyboardButton("⬅️ Back", callback_data='main_menu')]]
+        await query.edit_message_text(f"📊 **Questions:** `{len(db['questions'])}`", reply_markup=InlineKeyboardMarkup(btns), parse_mode='Markdown')
     elif query.data == 'get_backup':
         if os.path.exists(DB_FILE):
-            await context.bot.send_document(chat_id=update.effective_chat.id, document=open(DB_FILE, 'rb'), filename="quiz_backup.json", caption="✅ **Backup File!**\nCloud par restart hone par data ud jaye toh ye file bhejkar `/recover` likhna.")
+            await context.bot.send_document(chat_id=update.effective_chat.id, document=open(DB_FILE, 'rb'), filename="backup.json", caption="✅ Backup File!")
         else:
-            await query.edit_message_text("❌ Database Khali hai.", reply_markup=InlineKeyboardMarkup(back_btn))
-
+            await query.edit_message_text("❌ Empty DB.", reply_markup=InlineKeyboardMarkup(back_btn))
     elif query.data == 'start_cycle':
         await query.edit_message_text("🚀 Group me `/start_quiz` karein.", reply_markup=InlineKeyboardMarkup(back_btn))
     elif query.data == 'clear':
@@ -124,11 +121,11 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db['groups'] = {}
         db['current_polls'] = {}
         save_db(db)
-        await query.edit_message_text("✅ All Data Cleared!", reply_markup=InlineKeyboardMarkup(back_btn))
+        await query.edit_message_text("✅ Cleared!", reply_markup=InlineKeyboardMarkup(back_btn))
     elif query.data == 'main_menu':
         await start(update, context)
 
-# --- QUIZ LOGIC ---
+# --- LOGIC ---
 async def auto_quiz_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     now = datetime.now(IST)
@@ -138,7 +135,6 @@ async def auto_quiz_job(context: ContextTypes.DEFAULT_TYPE):
     last_msg_id = None
     if str(chat_id) in db["groups"] and isinstance(db["groups"][str(chat_id)], dict):
         last_msg_id = db["groups"][str(chat_id)].get('last_msg')
-
     if last_msg_id:
         try: await context.bot.delete_message(chat_id, last_msg_id)
         except: pass
@@ -157,15 +153,12 @@ async def auto_quiz_job(context: ContextTypes.DEFAULT_TYPE):
     db["current_polls"][str(msg.poll.id)] = {"chat_id": chat_id, "correct_option": q["correct"]}
     save_db(db)
 
-# --- HANDLERS ---
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = update.poll_answer
     poll_id = str(answer.poll_id)
     user_id = str(answer.user.id)
-    
     if "current_polls" not in db: db["current_polls"] = {}
     if "scores" not in db: db["scores"] = {}
-
     if poll_id in db["current_polls"]:
         correct = db["current_polls"][poll_id]["correct_option"]
         if user_id not in db["scores"]: db["scores"][user_id] = {"name": answer.user.first_name, "correct": 0, "attempted": 0}
@@ -211,17 +204,16 @@ async def handle_recovery(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("♻️ **Recovery Successful!**")
 
 if __name__ == '__main__':
-    # Token check before starting
-    if not TOKEN:
-        print("❌ CRITICAL ERROR: TOKEN NOT FOUND! Please set 'TOKEN' in Koyeb Secrets.")
+    keep_alive() # Starts Flask Server
+    if not TOKEN: print("❌ TOKEN NOT FOUND!")
     else:
-        app = ApplicationBuilder().token(TOKEN).build()
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CommandHandler("register", register))
-        app.add_handler(CommandHandler("start_quiz", start_quiz_cmd))
-        app.add_handler(CallbackQueryHandler(handle_buttons))
-        app.add_handler(MessageHandler(filters.POLL, extract_quiz))
-        app.add_handler(PollAnswerHandler(handle_poll_answer))
-        app.add_handler(MessageHandler(filters.Document.MimeType("application/json"), handle_recovery))
-        app.job_queue.run_daily(send_daily_results, time=time(hour=0, minute=0, tzinfo=IST))
-        app.run_polling()
+        app_bot = ApplicationBuilder().token(TOKEN).build()
+        app_bot.add_handler(CommandHandler("start", start))
+        app_bot.add_handler(CommandHandler("register", register))
+        app_bot.add_handler(CommandHandler("start_quiz", start_quiz_cmd))
+        app_bot.add_handler(CallbackQueryHandler(handle_buttons))
+        app_bot.add_handler(MessageHandler(filters.POLL, extract_quiz))
+        app_bot.add_handler(PollAnswerHandler(handle_poll_answer))
+        app_bot.add_handler(MessageHandler(filters.Document.MimeType("application/json"), handle_recovery))
+        app_bot.job_queue.run_daily(send_daily_results, time=time(hour=0, minute=0, tzinfo=IST))
+        app_bot.run_polling()
