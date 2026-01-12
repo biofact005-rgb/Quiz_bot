@@ -1,18 +1,20 @@
 import logging
 import asyncio
 import random
+import json
 import os
 from datetime import datetime, time, timezone, timedelta
 from telegram import Update, Poll, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, PollAnswerHandler
-import pymongo 
 
-# --- CONFIGURATION ---
-TOKEN = '8578006548:AAFb9bjUBZAmkIfYvrpFpWS2c0YIw-2baBI'
+# --- CONFIGURATION (SECURE MODE) ---
+# Token ab system environment se uthaya jayega (Koyeb Settings se)
+TOKEN = os.getenv('TOKEN')
 
-# ⚠️ YAHAN APNA MONGODB URL DALEIN (Password ke sath)
-MONGO_URL = "mongodb+srv://YOUR_USER:YOUR_PASSWORD@cluster0.mongodb.net/?retryWrites=true&w=majority"
+if not TOKEN:
+    print("❌ ERROR: Bot Token nahi mila! Koyeb 'Environment Variables' check karein.")
 
+DB_FILE = 'database.json'
 DEV_USERNAME = '@errorkidk'
 
 # --- TIMEZONE (India +5:30) ---
@@ -20,26 +22,24 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- MONGODB CONNECTION ---
-try:
-    client = pymongo.MongoClient(MONGO_URL)
-    db_cloud = client["QuizBotDB"]
-    collection = db_cloud["data"]
-    logging.info("✅ Connected to MongoDB Atlas!")
-except Exception as e:
-    logging.error(f"❌ MongoDB Connection Failed: {e}")
-
-# --- DATABASE HANDLING (CLOUD) ---
+# --- DATABASE HANDLING (LOCAL FILE) ---
 def load_db():
-    try:
-        data = collection.find_one({"_id": "bot_data"})
-        if data: return data
-    except: pass
-    return {"_id": "bot_data", "questions": [], "groups": {}, "current_polls": {}, "scores": {}}
+    default_db = {"questions": [], "groups": {}, "current_polls": {}, "scores": {}}
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, 'r') as f:
+                data = json.load(f)
+                # Auto-Fix Missing Keys
+                for key in default_db:
+                    if key not in data: data[key] = default_db[key]
+                return data
+        except: pass
+    return default_db
 
 def save_db(data):
     try:
-        collection.replace_one({"_id": "bot_data"}, data, upsert=True)
+        with open(DB_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
     except Exception as e:
         logging.error(f"Save Error: {e}")
 
@@ -52,11 +52,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📱 Active Groups", callback_data='active_groups')],
         [InlineKeyboardButton("📝 Add Questions", callback_data='add_q'),
          InlineKeyboardButton("📢 Group Setup", callback_data='reg_g')],
-        [InlineKeyboardButton("📊 Status", callback_data='status')],
+        [InlineKeyboardButton("💾 Backup & Restore", callback_data='status')],
         [InlineKeyboardButton("🚀 Start Cycle", callback_data='start_cycle')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    intro_text = f"🌟 **Cloud Quiz Bot** 🌟\n━━━━━━━━━━━━━━━━━━━━\n☁️ **Storage:** MongoDB (Permanent)\n👇 **Menu:**"
+    
+    intro_text = (
+        f"🌟 **Advance Quiz Bot (Secure)** 🌟\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👑 **Creator:** {DEV_USERNAME}\n\n"
+        f"✅ **Public Safe:** Token Hidden hai.\n"
+        f"📂 **Data:** JSON File (Backup regularly!)\n"
+        f"👇 **Main Menu:**"
+    )
     
     if update.callback_query:
         await update.callback_query.edit_message_text(intro_text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -71,7 +79,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if query.data == 'leaderboard':
         if "scores" not in db or not db["scores"]:
-            await query.edit_message_text("📉 Koi data nahi hai.", reply_markup=InlineKeyboardMarkup(back_btn))
+            await query.edit_message_text("📉 No data yet.", reply_markup=InlineKeyboardMarkup(back_btn))
             return
         sorted_scores = sorted(db["scores"].values(), key=lambda x: x['correct'], reverse=True)[:10]
         text = "🏆 **TOP 10 PLAYERS** 🏆\n\n"
@@ -81,7 +89,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == 'active_groups':
         if not db["groups"]:
-            await query.edit_message_text("📱 Koi group active nahi.", reply_markup=InlineKeyboardMarkup(back_btn))
+            await query.edit_message_text("📱 No active groups.", reply_markup=InlineKeyboardMarkup(back_btn))
             return
         text = "📱 **Active Groups:**\n\n"
         for _, data in db["groups"].items():
@@ -90,21 +98,33 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(back_btn), parse_mode='Markdown')
 
     elif query.data == 'add_q':
-        await query.edit_message_text("📥 **Add:** Quiz forward karein.", reply_markup=InlineKeyboardMarkup(back_btn))
+        await query.edit_message_text("📥 **Add:** Forward questions from @QuizBot here.", reply_markup=InlineKeyboardMarkup(back_btn))
     elif query.data == 'reg_g':
-        await query.edit_message_text("📢 **Setup:** Group mein `/register` likhein.", reply_markup=InlineKeyboardMarkup(back_btn))
+        await query.edit_message_text("📢 **Setup:** Group me `/register` likhein.", reply_markup=InlineKeyboardMarkup(back_btn))
+    
     elif query.data == 'status':
-        btns = [[InlineKeyboardButton("🗑 Clear DB", callback_data='clear')], [InlineKeyboardButton("⬅️ Back", callback_data='main_menu')]]
-        await query.edit_message_text(f"📊 Questions: `{len(db['questions'])}`", reply_markup=InlineKeyboardMarkup(btns), parse_mode='Markdown')
+        btns = [
+            [InlineKeyboardButton("📥 Download Backup", callback_data='get_backup')],
+            [InlineKeyboardButton("🗑 Clear All Data", callback_data='clear')],
+            [InlineKeyboardButton("⬅️ Back", callback_data='main_menu')]
+        ]
+        await query.edit_message_text(f"📊 **File Stats:**\nQuestions: `{len(db['questions'])}`", reply_markup=InlineKeyboardMarkup(btns), parse_mode='Markdown')
+
+    elif query.data == 'get_backup':
+        if os.path.exists(DB_FILE):
+            await context.bot.send_document(chat_id=update.effective_chat.id, document=open(DB_FILE, 'rb'), filename="quiz_backup.json", caption="✅ **Backup File!**\nCloud par restart hone par data ud jaye toh ye file bhejkar `/recover` likhna.")
+        else:
+            await query.edit_message_text("❌ Database Khali hai.", reply_markup=InlineKeyboardMarkup(back_btn))
+
     elif query.data == 'start_cycle':
-        await query.edit_message_text("🚀 Group mein `/start_quiz` karein.", reply_markup=InlineKeyboardMarkup(back_btn))
+        await query.edit_message_text("🚀 Group me `/start_quiz` karein.", reply_markup=InlineKeyboardMarkup(back_btn))
     elif query.data == 'clear':
         db['questions'] = []
         db['scores'] = {}
         db['groups'] = {}
         db['current_polls'] = {}
         save_db(db)
-        await query.edit_message_text("✅ Cleared!", reply_markup=InlineKeyboardMarkup(back_btn))
+        await query.edit_message_text("✅ All Data Cleared!", reply_markup=InlineKeyboardMarkup(back_btn))
     elif query.data == 'main_menu':
         await start(update, context)
 
@@ -181,13 +201,27 @@ async def start_quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.job_queue.run_repeating(auto_quiz_job, interval=600, first=5, chat_id=update.effective_chat.id)
     await update.message.reply_text("🚀 Started!")
 
+async def handle_recovery(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    doc = update.message.document
+    if doc.file_name.endswith('.json') and update.message.caption == '/recover':
+        file = await doc.get_file()
+        await file.download_to_drive(DB_FILE)
+        global db
+        db = load_db()
+        await update.message.reply_text("♻️ **Recovery Successful!**")
+
 if __name__ == '__main__':
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("register", register))
-    app.add_handler(CommandHandler("start_quiz", start_quiz_cmd))
-    app.add_handler(CallbackQueryHandler(handle_buttons))
-    app.add_handler(MessageHandler(filters.POLL, extract_quiz))
-    app.add_handler(PollAnswerHandler(handle_poll_answer))
-    app.job_queue.run_daily(send_daily_results, time=time(hour=0, minute=0, tzinfo=IST))
-    app.run_polling()
+    # Token check before starting
+    if not TOKEN:
+        print("❌ CRITICAL ERROR: TOKEN NOT FOUND! Please set 'TOKEN' in Koyeb Secrets.")
+    else:
+        app = ApplicationBuilder().token(TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("register", register))
+        app.add_handler(CommandHandler("start_quiz", start_quiz_cmd))
+        app.add_handler(CallbackQueryHandler(handle_buttons))
+        app.add_handler(MessageHandler(filters.POLL, extract_quiz))
+        app.add_handler(PollAnswerHandler(handle_poll_answer))
+        app.add_handler(MessageHandler(filters.Document.MimeType("application/json"), handle_recovery))
+        app.job_queue.run_daily(send_daily_results, time=time(hour=0, minute=0, tzinfo=IST))
+        app.run_polling()
