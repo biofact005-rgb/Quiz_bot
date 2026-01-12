@@ -25,10 +25,12 @@ def keep_alive():
     t.start()
 
 # --- CONFIGURATION ---
-# Render Environment Variable se Token lega
 TOKEN = os.getenv('TOKEN')
+# Owner ID Environment se ayega (Security ke liye)
+OWNER_ID = int(os.getenv('OWNER_ID', '0')) 
+
 DB_FILE = 'database.json'
-DEV_USERNAME = '@errorkidk'  # <--- Aapka naam wapas aa gaya!
+DEV_USERNAME = '@errorkidk'
 
 # --- TIMEZONE (India +5:30) ---
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -37,7 +39,13 @@ logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=lo
 
 # --- DATABASE HANDLING ---
 def load_db():
-    default_db = {"questions": [], "groups": {}, "current_polls": {}, "scores": {}}
+    default_db = {
+        "questions": [], 
+        "groups": {}, 
+        "current_polls": {}, 
+        "scores": {},
+        "auth_users": [] # Naya: Authorized Users List
+    }
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, 'r') as f:
@@ -57,29 +65,55 @@ def save_db(data):
 
 db = load_db()
 
-# --- UI & INTRO (Interactive View) ---
+# --- SECURITY CHECK ---
+def is_authorized(user_id):
+    # Ya toh wo Owner ho, ya Authorized list mein ho
+    if user_id == OWNER_ID:
+        return True
+    if user_id in db.get("auth_users", []):
+        return True
+    return False
+
+# --- UI & INTRO ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    
+    # 🔒 CHECK PERMISSION
+    if not is_authorized(user.id):
+        # Agar permission nahi hai, toh ye dikhao
+        keyboard = [[InlineKeyboardButton("✋ Request Access", callback_data='request_access')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        intro_text = (
+            f"⛔ **Access Denied!**\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👋 Hi {user.first_name},\n"
+            f"Yeh ek **Private Bot** hai. Isse use karne ke liye Owner se permission leni hogi.\n\n"
+            f"👇 **Niche button dabakar request bhejein.**"
+        )
+        await update.message.reply_text(intro_text, reply_markup=reply_markup, parse_mode='Markdown')
+        return
+
+    # ✅ Agar Authorized hai, toh Normal Menu dikhao
     keyboard = [
         [InlineKeyboardButton("🏆 Live Leaderboard", callback_data='leaderboard')],
         [InlineKeyboardButton("📱 Active Groups", callback_data='active_groups')],
         [InlineKeyboardButton("📝 Add Questions", callback_data='add_q'),
          InlineKeyboardButton("📢 Group Setup", callback_data='reg_g')],
-        [InlineKeyboardButton("💾 Backup & DB", callback_data='status')],
+        [InlineKeyboardButton("💾 Backup & Users", callback_data='status')],
         [InlineKeyboardButton("🚀 Start Quiz Cycle", callback_data='start_cycle')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # <--- Decorated Intro Wapas Aa Gaya --->
     intro_text = (
         f"🌟 **Advance Quiz Bot (Pro)** 🌟\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"👑 **Creator:** {DEV_USERNAME}\n\n"
         f"🤖 **Features:**\n"
-        f"✅ **Auto-Quiz:** 10 Min Interval (24/7)\n"
-        f"✅ **Live Leaderboard:** 🥇 Gold Medal System\n"
-        f"✅ **Backup System:** Data hamesha safe rakhein.\n"
-        f"☁️ **Server:** Render Cloud\n\n"
-        f"👇 **Niche Menu se select karein:**"
+        f"✅ **Random:** Questions mix hoke aayenge.\n"
+        f"✅ **Security:** Sirf authorized log use kar sakte hain.\n"
+        f"✅ **Backup:** Data hamesha safe rakhein.\n\n"
+        f"👇 **Main Menu:**"
     )
     
     if update.callback_query:
@@ -87,10 +121,58 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(intro_text, reply_markup=reply_markup, parse_mode='Markdown')
 
-# --- BUTTON HANDLER ---
+# --- BUTTON HANDLER (UPDATED) ---
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user = query.from_user
     await query.answer()
+    
+    # --- SECURITY LOGIC ---
+    if query.data == 'request_access':
+        # Owner ko request bhejo
+        if OWNER_ID == 0:
+            await query.edit_message_text("❌ Owner ID set nahi hai. Developer se contact karein.")
+            return
+            
+        await query.edit_message_text("⏳ **Request Sent!**\nOwner review kar rahe hain, wait karein.")
+        
+        # Owner ko message
+        admin_btns = [
+            [InlineKeyboardButton("✅ Accept", callback_data=f'auth_yes_{user.id}'),
+             InlineKeyboardButton("❌ Reject", callback_data=f'auth_no_{user.id}')]
+        ]
+        await context.bot.send_message(
+            chat_id=OWNER_ID,
+            text=f"🔔 **New Access Request!**\n\n👤 Name: {user.first_name}\n🆔 ID: `{user.id}`\nusername: @{user.username}",
+            reply_markup=InlineKeyboardMarkup(admin_btns)
+        )
+        return
+
+    # Owner Actions (Accept/Reject)
+    if query.data.startswith('auth_yes_'):
+        new_user_id = int(query.data.split('_')[2])
+        if new_user_id not in db["auth_users"]:
+            db["auth_users"].append(new_user_id)
+            save_db(db)
+        
+        await query.edit_message_text(f"✅ User {new_user_id} ko access de diya!")
+        try: await context.bot.send_message(new_user_id, "🎉 **Access Granted!**\nAb aap `/start` karke bot use kar sakte hain.")
+        except: pass
+        return
+
+    if query.data.startswith('auth_no_'):
+        target_id = int(query.data.split('_')[2])
+        await query.edit_message_text(f"❌ User {target_id} ki request reject kar di.")
+        try: await context.bot.send_message(target_id, "❌ **Access Denied** by Owner.")
+        except: pass
+        return
+
+    # Check for other buttons
+    if not is_authorized(user.id):
+        await query.edit_message_text("⛔ **Unauthorized!**\nPehle permission lein.")
+        return
+
+    # --- NORMAL MENU LOGIC ---
     back_btn = [[InlineKeyboardButton("⬅️ Main Menu", callback_data='main_menu')]]
     
     if query.data == 'leaderboard':
@@ -99,22 +181,17 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         sorted_scores = sorted(db["scores"].values(), key=lambda x: x['correct'], reverse=True)[:10]
-        
-        # <--- Decorated Medals Logic --->
         text = "🏆 **TOP 10 PLAYERS** 🏆\n━━━━━━━━━━━━━━━━━━━━\n"
         medals = ["🥇", "🥈", "🥉"]
-        
         for i, player in enumerate(sorted_scores):
             rank = medals[i] if i < 3 else f"#{i+1}"
-            text += f"{rank} **{player['name']}**\n   ✅ Correct: {player['correct']} | 🎯 Attempts: {player['attempted']}\n\n"
-            
+            text += f"{rank} **{player['name']}**\n   ✅ {player['correct']} | 🎯 {player['attempted']}\n\n"
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(back_btn), parse_mode='Markdown')
 
     elif query.data == 'active_groups':
         if not db["groups"]:
             await query.edit_message_text("📱 **Active Groups:**\n\nKoi bhi group registered nahi hai.", reply_markup=InlineKeyboardMarkup(back_btn), parse_mode='Markdown')
             return
-            
         text = "📱 **Active Groups Report** 📱\n━━━━━━━━━━━━━━━━━━━━\n"
         for _, data in db["groups"].items():
             if isinstance(data, dict):
@@ -130,9 +207,17 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(back_btn), parse_mode='Markdown')
 
     elif query.data == 'status':
-        q_count = len(db['questions'])
-        g_count = len(db['groups'])
-        msg = f"📊 **Database Status:**\n\nQuestions: `{q_count}`\nGroups: `{g_count}`\nTime: `{datetime.now(IST).strftime('%I:%M %p')}`"
+        # Show Users Info
+        users_count = len(db.get("auth_users", []))
+        auth_list = "\n".join([f"🆔 `{uid}`" for uid in db.get("auth_users", [])]) if users_count > 0 else "None"
+        
+        msg = (
+            f"📊 **System Status:**\n"
+            f"Questions: `{len(db['questions'])}`\n"
+            f"Groups: `{len(db['groups'])}`\n"
+            f"Authorized Users: `{users_count}`\n\n"
+            f"👥 **User IDs:**\n{auth_list}"
+        )
         btns = [
             [InlineKeyboardButton("📥 Download Backup", callback_data='get_backup')],
             [InlineKeyboardButton("🗑 Clear All Data", callback_data='clear')],
@@ -146,7 +231,7 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 chat_id=update.effective_chat.id, 
                 document=open(DB_FILE, 'rb'), 
                 filename="backup.json", 
-                caption="✅ **Backup File!**\n\nRender restart hone par agar data udd jaye, toh ye file bhejkar `/recover` likhna."
+                caption="✅ **Backup File!**"
             )
         else:
             await query.edit_message_text("❌ Database Empty.", reply_markup=InlineKeyboardMarkup(back_btn))
@@ -166,12 +251,11 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == 'main_menu':
         await start(update, context)
 
-# --- QUIZ LOGIC (10 MINS) ---
+# --- QUIZ LOGIC (Random & 10 Mins) ---
 async def auto_quiz_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     now = datetime.now(IST)
     
-    # Silent Mode (6PM - 10PM)
     if 18 <= now.hour < 22: return
     if not db["questions"]: return
     
@@ -183,7 +267,11 @@ async def auto_quiz_job(context: ContextTypes.DEFAULT_TYPE):
         try: await context.bot.delete_message(chat_id, last_msg_id)
         except: pass
 
+    # ✅ RANDOM SELECTION LOGIC
+    # random.choice() puri list me se kahin se bhi ek uthata hai.
+    # Ye sequential nahi chalta (1,2,3 nahi), ye random hai (5, 99, 2, 50...)
     q = random.choice(db["questions"])
+    
     msg = await context.bot.send_poll(
         chat_id=chat_id,
         question=q["question"],
@@ -209,8 +297,7 @@ async def auto_quiz_job(context: ContextTypes.DEFAULT_TYPE):
 async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = update.poll_answer
     poll_id = str(answer.poll_id)
-    user = answer.user
-    user_id = str(user.id)
+    user_id = str(answer.user.id)
     
     if "current_polls" not in db: db["current_polls"] = {}
     if "scores" not in db: db["scores"] = {}
@@ -225,7 +312,7 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
             db["scores"][user_id]["correct"] += 1
         save_db(db)
 
-# --- DAILY RESULTS (Decorated) ---
+# --- DAILY RESULTS ---
 async def send_daily_results(context: ContextTypes.DEFAULT_TYPE):
     if "scores" not in db or not db["scores"]:
         text = "📅 **Daily Report:** Aaj kisi ne participate nahi kiya."
@@ -250,6 +337,9 @@ async def send_daily_results(context: ContextTypes.DEFAULT_TYPE):
 
 # --- COMMANDS ---
 async def extract_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_authorized(user_id): return # Security check
+    
     if update.message.poll and update.message.poll.type == 'quiz':
         p = update.message.poll
         db["questions"].append({"question": p.question, "options": [o.text for o in p.options], "correct": p.correct_option_id})
@@ -259,15 +349,28 @@ async def extract_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Sirf **Quiz Polls** forward karein.")
 
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    # Note: Group me register karne ke liye owner ka wahan hona zaroori nahi, but command authorized user hi de sakta hai.
+    # Agar aap chahte hain ki koi bhi group register kar sake, toh niche wali line hata dein.
+    if not is_authorized(user_id): 
+        await update.message.reply_text("⛔ Sirf Owner/Authorized users register kar sakte hain.")
+        return
+
     db["groups"][str(update.effective_chat.id)] = {"last_msg": None, "title": update.effective_chat.title, "count": 0}
     save_db(db)
     await update.message.reply_text("✅ Registered!")
 
 async def start_quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_authorized(user_id): return
+
     context.job_queue.run_repeating(auto_quiz_job, interval=600, first=5, chat_id=update.effective_chat.id)
-    await update.message.reply_text("🚀 **Cycle Started!** (10 Min Interval)")
+    await update.message.reply_text("🚀 **Cycle Started!**")
 
 async def handle_recovery(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_authorized(user_id): return
+
     doc = update.message.document
     if doc.file_name.endswith('.json') and update.message.caption == '/recover':
         file = await doc.get_file()
@@ -277,10 +380,10 @@ async def handle_recovery(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("♻️ **Data Restored Successfully!**")
 
 if __name__ == '__main__':
-    keep_alive() # Starts Flask Server for Render
+    keep_alive() 
     
     if not TOKEN:
-        print("❌ TOKEN NOT FOUND! Render Environment Variables check karein.")
+        print("❌ TOKEN NOT FOUND!")
     else:
         app = ApplicationBuilder().token(TOKEN).build()
         app.add_handler(CommandHandler("start", start))
