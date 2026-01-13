@@ -44,7 +44,7 @@ def load_db():
         "current_polls": {}, 
         "scores": {},
         "auth_users": [],
-        "last_scores_backup": {} # Naya: Backup rakhne ke liye
+        "last_scores_backup": {} # Backup ke liye
     }
     if os.path.exists(DB_FILE):
         try:
@@ -89,8 +89,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ✅ Authorized Menu
     keyboard = [
-        [InlineKeyboardButton("🏆 Leaderboard", callback_data='leaderboard'),
-         InlineKeyboardButton("📱 Active Groups", callback_data='active_groups')],
+        [InlineKeyboardButton("🏆 Leaderboard (Advance)", callback_data='leaderboard')],
+        [InlineKeyboardButton("📱 Active Groups", callback_data='active_groups')],
         [InlineKeyboardButton("📝 Add Qs", callback_data='add_q'),
          InlineKeyboardButton("📢 Register", callback_data='reg_g')],
         [InlineKeyboardButton("💾 Backup & Restore", callback_data='status')],
@@ -99,12 +99,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     intro_text = (
-        f"🌟 **Advance Quiz Bot (Pro)** 🌟\n"
+        f"🌟 **Advance Quiz Bot (Ultra)** 🌟\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"👑 **Creator:** {DEV_USERNAME}\n\n"
-        f"✅ **Security:** Active (Owner Only)\n"
-        f"✅ **Safe Mode:** Leaderboard Restore Feature Added!\n"
-        f"☁️ **Server:** Render 24/7\n"
+        f"📊 **New:** Advance Leaderboard + Accuracy %\n"
+        f"🕛 **Auto:** Daily Report at 12:00 AM\n"
+        f"♻️ **Safe:** Auto-Backup & Restore System\n"
     )
     if update.callback_query:
         await update.callback_query.edit_message_text(intro_text, reply_markup=reply_markup, parse_mode='Markdown')
@@ -156,11 +156,16 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("📉 No data.", reply_markup=InlineKeyboardMarkup(back_btn))
             return
         sorted_scores = sorted(db["scores"].values(), key=lambda x: x['correct'], reverse=True)[:10]
-        text = "🏆 **TOP 10** 🏆\n"
+        
+        # 📊 ADVANCE LEADERBOARD LOGIC
+        text = "🏆 **TOP 10 PLAYERS** 🏆\n━━━━━━━━━━━━━━━━━━━━\n"
         medals = ["🥇", "🥈", "🥉"]
         for i, p in enumerate(sorted_scores):
             rank = medals[i] if i < 3 else f"#{i+1}"
-            text += f"{rank} **{p['name']}** - ✅ {p['correct']}\n"
+            # Accuracy Calculation
+            acc = (p['correct'] / p['attempted']) * 100 if p['attempted'] > 0 else 0
+            text += f"{rank} **{p['name']}**\n   ✅ {p['correct']} | 🎯 {p['attempted']} | ⚡ `{acc:.1f}%`\n\n"
+            
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(back_btn), parse_mode='Markdown')
 
     elif query.data == 'active_groups':
@@ -179,11 +184,10 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("📢 **Setup:** Group me `/register` likhein.", reply_markup=InlineKeyboardMarkup(back_btn))
     
     elif query.data == 'status':
-        # Status Menu with RESTORE Button
         users_count = len(db.get("auth_users", []))
         msg = f"📊 **Stats:**\nQs: `{len(db['questions'])}`\nUsers: `{users_count}`"
         btns = [
-            [InlineKeyboardButton("♻️ Restore Leaderboard", callback_data='restore_scores')], # Naya Button
+            [InlineKeyboardButton("♻️ Restore Leaderboard", callback_data='restore_scores')], # RESTORE BUTTON
             [InlineKeyboardButton("📥 Backup File", callback_data='get_backup')], 
             [InlineKeyboardButton("🗑 Clear All", callback_data='clear')], 
             [InlineKeyboardButton("⬅️ Back", callback_data='main_menu')]
@@ -191,13 +195,12 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(btns), parse_mode='Markdown')
 
     elif query.data == 'restore_scores':
-        # Restore Logic
         if "last_scores_backup" in db and db["last_scores_backup"]:
             db["scores"] = db["last_scores_backup"].copy()
             save_db(db)
-            await query.edit_message_text("✅ **Success!** Purana Leaderboard wapas aa gaya hai.", reply_markup=InlineKeyboardMarkup(back_btn))
+            await query.edit_message_text("✅ **Leaderboard Restored!**", reply_markup=InlineKeyboardMarkup(back_btn))
         else:
-            await query.edit_message_text("❌ **Error:** Koi backup nahi mila (Shayad reset abhi hua hi nahi).", reply_markup=InlineKeyboardMarkup(back_btn))
+            await query.edit_message_text("❌ Backup not found.", reply_markup=InlineKeyboardMarkup(back_btn))
 
     elif query.data == 'get_backup':
         if os.path.exists(DB_FILE):
@@ -230,6 +233,7 @@ async def auto_quiz_job(context: ContextTypes.DEFAULT_TYPE):
         try: await context.bot.delete_message(chat_id, last_msg_id)
         except: pass
 
+    # Random Logic
     q = random.choice(db["questions"])
     msg = await context.bot.send_poll(chat_id=chat_id, question=q["question"], options=q["options"], type='quiz', correct_option_id=q["correct"], is_anonymous=False)
     
@@ -257,22 +261,27 @@ async def handle_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if answer.option_ids[0] == correct: db["scores"][user_id]["correct"] += 1
         save_db(db)
 
-# --- DAILY RESULTS (WITH AUTO-BACKUP) ---
+# --- DAILY RESULTS (FIXED 12 AM + BACKUP) ---
 async def send_daily_results(context: ContextTypes.DEFAULT_TYPE):
     if "scores" not in db or not db["scores"]: return
     
     # 💾 AUTO BACKUP BEFORE RESET
     db["last_scores_backup"] = db["scores"].copy()
-    save_db(db) # Save backup immediately
+    save_db(db)
 
     sorted_scores = sorted(db["scores"].values(), key=lambda x: x['correct'], reverse=True)[:3]
-    text = "🏆 **DAILY LEADERBOARD** 🏆\n"
-    for p in sorted_scores: text += f"👤 {p['name']} - ✅ {p['correct']}\n"
+    text = "🏆 **DAILY LEADERBOARD (12:00 AM)** 🏆\n━━━━━━━━━━━━━━━━━━━━\n"
+    medals = ["🥇", "🥈", "🥉"]
+    for i, p in enumerate(sorted_scores):
+        medal = medals[i] if i < 3 else "🎗"
+        acc = (p['correct'] / p['attempted']) * 100 if p['attempted'] > 0 else 0
+        text += f"{medal} **{p['name']}**\n   ✅ {p['correct']} | 🎯 {p['attempted']} | ⚡ `{acc:.1f}%`\n\n"
+    
     for chat_id in db["groups"]:
         try: await context.bot.send_message(chat_id, text, parse_mode='Markdown')
         except: pass
     
-    # Reset Scores
+    # Clear & Save
     db["scores"] = {}
     db["current_polls"] = {}
     save_db(db)
@@ -320,5 +329,8 @@ if __name__ == '__main__':
         app.add_handler(MessageHandler(filters.POLL, extract_quiz))
         app.add_handler(PollAnswerHandler(handle_poll_answer))
         app.add_handler(MessageHandler(filters.Document.MimeType("application/json"), handle_recovery))
+        
+        # 🕛 12:00 AM FIX REPORT TIME
         app.job_queue.run_daily(send_daily_results, time=time(hour=0, minute=0, tzinfo=IST))
+        
         app.run_polling()
