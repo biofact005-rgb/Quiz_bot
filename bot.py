@@ -422,7 +422,6 @@ async def show_settings(update, context):
     await safe_edit_message(query, "⚙️ <b>Settings</b>", InlineKeyboardMarkup(btns))
 
     
-
 async def handle_admin(update, context):
     query = update.callback_query
     data = query.data
@@ -438,7 +437,7 @@ async def handle_admin(update, context):
         await safe_edit_message(query, "🛡️ <b>Content Admin Panel</b>", InlineKeyboardMarkup(btns))
         return
 
-    # 2. Select Subject (Ye button aapka kaam kar raha hai)
+    # 2. Select Subject
     if data == 'adm_main_BSEB':
         subjects = ["Hindi", "English", "Maths", "Biology", "Chemistry", "Physics"]
         btns = [[InlineKeyboardButton(s, callback_data=f'adm_deep_{s}')] for s in subjects]
@@ -446,7 +445,7 @@ async def handle_admin(update, context):
         await safe_edit_message(query, "📂 <b>BSEB > Select Subject:</b>", InlineKeyboardMarkup(btns))
         return
 
-    # 3. Handle Subject Click (Ye Logic Missing tha shayad, isliye button ruk raha tha)
+    # 3. Handle Subject Click
     if data.startswith('adm_deep_'):
         sub = data.split('_')[2] 
         if sub == "Hindi":
@@ -466,7 +465,7 @@ async def handle_admin(update, context):
         await safe_edit_message(query, f"📂 <b>{sub} > Select Type:</b>", InlineKeyboardMarkup(btns))
         return
 
-    # ... Baki Admin Functions ...
+    # 4. Admin Tools (List, Backup, etc.)
     if data == 'view_admin_list':
         msg = "👮‍♂️ <b>Admin List:</b>\nLoading details..."
         await safe_edit_message(query, msg, None)
@@ -488,6 +487,7 @@ async def handle_admin(update, context):
         context.user_data['awaiting_broadcast_msg'] = True
         return
 
+    # 5. Delete Menu
     if data == 'adm_del_menu':
         btns = [[InlineKeyboardButton("BSEB", callback_data='del_sel_BSEB')], [InlineKeyboardButton("Back", callback_data='menu_admin')]]
         await safe_edit_message(query, "🗑️ <b>Select Category:</b>", InlineKeyboardMarkup(btns))
@@ -496,164 +496,139 @@ async def handle_admin(update, context):
     if data.startswith(('del_sel_', 'adm_sel_')): 
         mode = 'del' if 'del' in data else 'adm'
         cat = data.split('_')[2]; context.user_data[f'{mode}_cat'] = cat
+        # Safe get keys
         subs = sorted(list(db["questions"].get(cat, {}).keys()))
         btns = [[InlineKeyboardButton(s, callback_data=f'{mode}_sub_{s}')] for s in subs]
         btns.append([InlineKeyboardButton("Back", callback_data='menu_admin')])
         await safe_edit_message(query, f"📂 <b>{cat} > Select Subject:</b>", InlineKeyboardMarkup(btns))
         return
 
-    # 4. Handle Final Chapter List (With Limit 50)
-    if data.startswith(('del_sub_', 'adm_sub_')):
+    # ==================================================================
+    # 6. PAGINATION & LISTING LOGIC (UPDATED FOR FIX)
+    # ==================================================================
+    if data.startswith(('del_sub_', 'adm_sub_', 'pg_adm_', 'pg_del_')):
         mode = 'del' if 'del' in data else 'adm'
-        sub = data.replace(f'{mode}_sub_', ''); context.user_data[f'{mode}_sub'] = sub
+        
+        # --- Determine Page & Subject ---
+        page = 0
+        if data.startswith('pg_'):
+            # Format: pg_adm_PAGE_SUB...
+            parts = data.split('_')
+            page = int(parts[2])
+            sub = "_".join(parts[3:]) 
+        else:
+            # First load
+            sub = data.replace(f'{mode}_sub_', '')
+            page = 0
+
+        context.user_data[f'{mode}_sub'] = sub
         cat = context.user_data.get(f'{mode}_cat', 'BSEB') 
         context.user_data[f'{mode}_cat'] = cat 
         
-        # Limit List to 50 to prevent crash
-        all_keys = list(db["questions"].get(cat, {}).get(sub, {}).keys())
-        chaps = all_keys[:50]
+        # Get all chapters/channels and sort them
+        all_keys = sorted(list(db["questions"].get(cat, {}).get(sub, {}).keys()))
         
+        ITEMS_PER_PAGE = 10
+        total_items = len(all_keys)
+        total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+        if total_pages == 0: total_pages = 1
+        
+        # Slice for current page
+        start_idx = page * ITEMS_PER_PAGE
+        end_idx = start_idx + ITEMS_PER_PAGE
+        chaps = all_keys[start_idx:end_idx]
+        
+        btns = []
         if mode == 'del':
-            btns = [[InlineKeyboardButton(f"❌ {c}", callback_data=f'del_chap_{c[:30]}')] for c in chaps]
-            btns.append([InlineKeyboardButton("Back", callback_data='menu_admin')])
-            await safe_edit_message(query, "🗑️ <b>Select Item to DELETE:</b>", InlineKeyboardMarkup(btns))
+            for i, c in enumerate(chaps):
+                global_idx = start_idx + i
+                # Save mapping: Index -> Real Name
+                context.user_data[f'del_chap_idx_{global_idx}'] = c
+                # Send Index in callback to save bytes
+                btns.append([InlineKeyboardButton(f"❌ {c}", callback_data=f'del_idx_{global_idx}')])
+            title = f"🗑️ <b>Delete ({page+1}/{total_pages}):</b>"
         else:
-            btns = [[InlineKeyboardButton(c, callback_data=f'adm_chap_{c[:30]}')] for c in chaps]
+            for i, c in enumerate(chaps):
+                global_idx = start_idx + i
+                context.user_data[f'adm_chap_idx_{global_idx}'] = c
+                btns.append([InlineKeyboardButton(c, callback_data=f'adm_idx_{global_idx}')])
+            
             btns.append([InlineKeyboardButton("➕ Add New", callback_data='adm_new_chap')])
-            
-            back_data = 'menu_admin'
-            if cat == 'BSEB':
-                 base_sub = sub.split('-')[0]
-                 back_data = f'adm_deep_{base_sub}'
-            btns.append([InlineKeyboardButton("Back", callback_data=back_data)])
-            
-            await safe_edit_message(query, f"📂 <b>{sub} > Items (First 50):</b>", InlineKeyboardMarkup(btns))
+            title = f"📂 <b>{sub} ({page+1}/{total_pages}):</b>"
+
+        # --- Pagination Buttons ---
+        pag_btns = []
+        if page > 0:
+            pag_btns.append(InlineKeyboardButton("⬅️ Prev", callback_data=f'pg_{mode}_{page-1}_{sub}'))
+        if page < total_pages - 1:
+            pag_btns.append(InlineKeyboardButton("Next ➡️", callback_data=f'pg_{mode}_{page+1}_{sub}'))
+        if pag_btns: btns.append(pag_btns)
+
+        # --- Back Button ---
+        back_data = 'menu_admin'
+        if mode == 'adm' and cat == 'BSEB':
+             # Try to go back to deep selection if possible
+             base_sub = sub.split('-')[0]
+             back_data = f'adm_deep_{base_sub}'
+        elif mode == 'del':
+             back_data = f'del_sel_{cat}'
+        
+        btns.append([InlineKeyboardButton("Back", callback_data=back_data)])
+        
+        await safe_edit_message(query, title, InlineKeyboardMarkup(btns))
         return
 
-    # ... Delete/Add Actions ...
-    if data.startswith('del_chap_'):
-        chap = data.replace('del_chap_', ''); context.user_data['del_chap'] = chap
-        btns = [[InlineKeyboardButton("✅ YES, DELETE", callback_data='confirm_del')], [InlineKeyboardButton("❌ CANCEL", callback_data='menu_admin')]]
+    # ==================================================================
+    # 7. INDEX HANDLERS (UPDATED)
+    # ==================================================================
+    if data.startswith('del_idx_'):
+        idx = int(data.split('_')[2])
+        chap = context.user_data.get(f'del_chap_idx_{idx}')
+        if not chap:
+             await query.answer("❌ Item missing/refresh needed", show_alert=True)
+             return
+        context.user_data['del_chap'] = chap
+        btns = [[InlineKeyboardButton("✅ YES, DELETE", callback_data='confirm_del')], [InlineKeyboardButton("❌ CANCEL", callback_data=f'del_sub_{context.user_data["del_sub"]}')]]
         await safe_edit_message(query, f"⚠️ <b>Delete '{chap}'?</b>", InlineKeyboardMarkup(btns))
         return
-    if data == 'confirm_del':
-        try:
-            # Note: Deletion might fail if we use truncated name, but for now this fixes crash
-            # For perfect deletion, we need full name, but that's complex. 
-            # Usually users delete recent mistakes.
-            target = context.user_data['del_chap']
-            # Try finding exact match in keys if possible
-            real_keys = db["questions"][context.user_data['del_cat']][context.user_data['del_sub']].keys()
-            for k in real_keys:
-                if k.startswith(target):
-                    del db["questions"][context.user_data['del_cat']][context.user_data['del_sub']][k]
-                    break
-            
-            save_db(db)
-            await query.answer("✅ Deleted!", show_alert=True)
-            await handle_admin(update, context)
-        except: await query.answer("❌ Error or Not Found", show_alert=True)
-        return
-    if data == 'adm_new_chap':
-        await safe_edit_message(query, "⌨️ <b>Type Name (Chapter/Channel):</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data='menu_admin')]]))
-        context.user_data['awaiting_chap_name'] = True
-        return
-    if data.startswith('adm_chap_'):
-        chap = data.split('_')[2]; context.user_data['adm_chap'] = chap; context.user_data['adm_mode'] = 'active'
-        await safe_edit_message(query, f"📂 <b>Active:</b> {chap}\n\n👇 <b>Forward Polls / Send .txt</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data='menu_admin')]]))
+
+    if data.startswith('adm_idx_'):
+        idx = int(data.split('_')[2])
+        chap = context.user_data.get(f'adm_chap_idx_{idx}')
+        if not chap:
+             await query.answer("❌ Item missing/refresh needed", show_alert=True)
+             return
+        context.user_data['adm_chap'] = chap; context.user_data['adm_mode'] = 'active'
+        await safe_edit_message(query, f"📂 <b>Active:</b> {chap}\n\n👇 <b>Forward Polls / Send .txt</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data=f'adm_sub_{context.user_data["adm_sub"]}')]]))
         return
 
-    
-    if data == 'view_admin_list':
-        msg = "👮‍♂️ <b>Admin List:</b>\nLoading details..."
-        await safe_edit_message(query, msg, None)
-        final_txt = "👮‍♂️ <b>Admin List:</b>\n"
-        for aid in db["admins"]:
-            try:
-                chat = await context.bot.get_chat(aid)
-                name = chat.username if chat.username else chat.first_name
-                final_txt += f"👤 @{esc(name)} ({aid})\n"
-            except: final_txt += f"👤 Unknown User ({aid})\n"
-        await safe_edit_message(query, final_txt, InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data='menu_owner')]]))
-        return
-        
-    if data == 'restore_prompt':
-        await safe_edit_message(query, "📤 <b>Send database.json:</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data='menu_owner')]]))
-        return
-    if data == 'adm_broadcast_prompt':
-        await safe_edit_message(query, "📢 <b>Send broadcast message:</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callbak_data='menu_admin')]]))
-        context.user_data['awaiting_broadcast_msg'] = True
-        return
-
-    if data == 'adm_del_menu':
-        btns = [[InlineKeyboardButton("BSEB", callback_data='del_sel_BSEB')], [InlineKeyboardButton("Back", callback_data='menu_admin')]]
-        await safe_edit_message(query, "🗑️ <b>Select Category:</b>", InlineKeyboardMarkup(btns))
-        return
-    
-    if data.startswith(('del_sel_', 'adm_sel_')): 
-        mode = 'del' if 'del' in data else 'adm'
-        cat = data.split('_')[2]; context.user_data[f'{mode}_cat'] = cat
-        subs = sorted(list(db["questions"].get(cat, {}).keys()))
-        btns = [[InlineKeyboardButton(s, callback_data=f'{mode}_sub_{s}')] for s in subs]
-        btns.append([InlineKeyboardButton("Back", callback_data='menu_admin')])
-        await safe_edit_message(query, f"📂 <b>{cat} > Select Subject:</b>", InlineKeyboardMarkup(btns))
-        return
-
-    if data.startswith(('del_sub_', 'adm_sub_')):
-        mode = 'del' if 'del' in data else 'adm'
-        sub = data.replace(f'{mode}_sub_', ''); context.user_data[f'{mode}_sub'] = sub
-        cat = context.user_data.get(f'{mode}_cat', 'BSEB') 
-        context.user_data[f'{mode}_cat'] = cat 
-        
-        chaps = db["questions"].get(cat, {}).get(sub, {}).keys()
-        if mode == 'del':
-            btns = [[InlineKeyboardButton(f"❌ {c}", callback_data=f'del_chap_{c}')] for c in chaps]
-            btns.append([InlineKeyboardButton("Back", callback_data='menu_admin')])
-            await safe_edit_message(query, "🗑️ <b>Select Item to DELETE:</b>", InlineKeyboardMarkup(btns))
-        else:
-            btns = [[InlineKeyboardButton(c, callback_data=f'adm_chap_{c}')] for c in chaps]
-            btns.append([InlineKeyboardButton("➕ Add New", callback_data='adm_new_chap')])
-            back_data = 'menu_admin'
-            if cat == 'BSEB':
-                 base_sub = sub.split('-')[0]
-                 back_data = f'adm_deep_{base_sub}'
-            btns.append([InlineKeyboardButton("Back", callback_data=back_data)])
-            await safe_edit_message(query, f"📂 <b>{sub} > Items:</b>", InlineKeyboardMarkup(btns))
-        return
-
-    if data.startswith('del_chap_'):
-        chap = data.replace('del_chap_', ''); context.user_data['del_chap'] = chap
-        btns = [[InlineKeyboardButton("✅ YES, DELETE", callback_data='confirm_del')], [InlineKeyboardButton("❌ CANCEL", callback_data='menu_admin')]]
-        await safe_edit_message(query, f"⚠️ <b>Delete '{chap}'?</b>", InlineKeyboardMarkup(btns))
-        return
+    # 8. Confirmation & Input Actions
     if data == 'confirm_del':
         try:
             del db["questions"][context.user_data['del_cat']][context.user_data['del_sub']][context.user_data['del_chap']]
             save_db(db)
             await query.answer("✅ Deleted!", show_alert=True)
-            await handle_admin(update, context)
+            # Return to list
+            await handle_admin(update, context) # This reloads the menu
         except: await query.answer("❌ Error", show_alert=True)
         return
+
     if data == 'adm_new_chap':
         await safe_edit_message(query, "⌨️ <b>Type Name (Chapter/Channel):</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data='menu_admin')]]))
         context.user_data['awaiting_chap_name'] = True
         return
-    if data.startswith('adm_chap_'):
-        chap = data.split('_')[2]; context.user_data['adm_chap'] = chap; context.user_data['adm_mode'] = 'active'
-        await safe_edit_message(query, f"📂 <b>Active:</b> {chap}\n\n👇 <b>Forward Polls / Send .txt</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data='menu_admin')]]))
-        return
-
 async def master_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     data = query.data
 
-    # MAINTENANCE CHECK
+    # 1. MAINTENANCE CHECK
     if db.get("maintenance_mode", False) and not is_admin(user_id):
         await query.answer("🚧 Bot is under maintenance!", show_alert=True)
         await send_maintenance_msg(update)
         return
     
+    # 2. JOIN CHECK
     if data == 'recheck_main':
         if await check_membership(IDS["MAIN"], user_id, context): await show_main_menu(update, context)
         else: await query.answer("❌ Join First!", show_alert=True)
@@ -663,10 +638,12 @@ async def master_callback_router(update: Update, context: ContextTypes.DEFAULT_T
         gid = IDS["BSEB"]; link = LINKS["BSEB"]
         await check_gate(query, context, gid, link, open_bseb_menu, data)
 
+    # 3. BASIC MENUS
     if data == 'main_menu': await show_main_menu(update, context)
     elif data == 'menu_settings': await show_settings(update, context)
     elif data == 'show_help': await show_help(update, context)
     
+    # 4. ADMIN ROUTING (UPDATED FOR PAGINATION)
     elif data == 'menu_owner' or data in ['view_admin_list', 'restore_prompt', 'get_backup', 'toggle_maint']: 
         if data == 'menu_owner': await show_owner_panel(update, context)
         elif data == 'get_backup': save_db(db); await context.bot.send_document(query.message.chat_id, document=open(DB_FILE, 'rb'), filename="backup.json")
@@ -678,8 +655,12 @@ async def master_callback_router(update: Update, context: ContextTypes.DEFAULT_T
     elif data == 'add_admin_prompt':
         context.user_data['awaiting_admin_id'] = True
         await safe_edit_message(query, "⌨️ <b>Send User ID to add as Admin:</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data='menu_owner')]]))
-    elif data.startswith(('menu_admin', 'adm_', 'del_', 'confirm_del')): await handle_admin(update, context)
     
+    # *** IMPORTANT: Include new tags (pg_, idx_) here ***
+    elif data.startswith(('menu_admin', 'adm_', 'del_', 'confirm_del', 'pg_adm_', 'pg_del_')): 
+        await handle_admin(update, context)
+    
+    # 5. IMPROVE MISTAKES
     elif data == 'menu_improve':
         btns = [[InlineKeyboardButton("BSEB", callback_data='imp_cat_BSEB')], [InlineKeyboardButton("Back", callback_data='main_menu')]]
         await safe_edit_message(query, "🎯 <b>Select Category:</b>", InlineKeyboardMarkup(btns))
@@ -699,6 +680,7 @@ async def master_callback_router(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data['quiz_cat'] = cat; context.user_data['quiz_sub'] = sub; context.user_data['quiz_mode'] = 'improve' 
         await ask_time(query)
 
+    # 6. SUBJECT SELECTION
     elif data == 'section_BSEB_Hindi': await open_bseb_hindi_sections(query, context)
     elif data == 'section_BSEB_English': await open_bseb_english_sections(query, context)
 
@@ -741,19 +723,51 @@ async def master_callback_router(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data['is_youtube_mode'] = False
         await safe_edit_message(query, f"📂 <b>{sub.split('-')[-1]}</b>", get_book_btns())
     
-    elif data == 'mode_single': await show_chapter_selection(query, context, multi=False)
-    elif data == 'mode_mix': context.user_data['selected_chapters'] = []; await show_chapter_selection(query, context, multi=True)
+    # 7. CHAPTER SELECTION (UPDATED FOR PAGINATION)
+    elif data == 'mode_single': await show_chapter_selection(query, context, multi=False, page=0)
+    elif data == 'mode_mix': context.user_data['selected_chapters'] = []; await show_chapter_selection(query, context, multi=True, page=0)
+    
+    # Pagination Handlers
+    elif data.startswith('pg_sng_'):
+        page = int(data.split('_')[2])
+        await show_chapter_selection(query, context, multi=False, page=page)
+    elif data.startswith('pg_mix_'):
+        page = int(data.split('_')[2])
+        await show_chapter_selection(query, context, multi=True, page=page)
+
+    # Index Handlers (Toggle)
     elif data.startswith('tgl_'):
-        chap = data.split('tgl_')[1]; sel = context.user_data.get('selected_chapters', [])
-        if chap in sel: sel.remove(chap)
-        else: sel.append(chap)
-        context.user_data['selected_chapters'] = sel
-        await show_chapter_selection(query, context, multi=True)
+        idx = int(data.split('_')[1])
+        chap = context.user_data.get(f'chap_idx_{idx}')
+        
+        if chap:
+            sel = context.user_data.get('selected_chapters', [])
+            if chap in sel: sel.remove(chap)
+            else: sel.append(chap)
+            context.user_data['selected_chapters'] = sel
+            
+            # Stay on same page
+            ITEMS_PER_PAGE = 10
+            current_page = idx // ITEMS_PER_PAGE
+            await show_chapter_selection(query, context, multi=True, page=current_page)
+        else:
+            await query.answer("⚠️ Please refresh menu", show_alert=True)
+
     elif data == 'confirm_mix':
         if not context.user_data.get('selected_chapters'): await query.answer("Select one!", show_alert=True); return
         context.user_data['final_chapters'] = context.user_data['selected_chapters']; await ask_time(query)
+    
+    # Index Handlers (Single)
     elif data.startswith('sng_'):
-        chap = data.split('sng_')[1]; context.user_data['final_chapters'] = [chap]; await ask_time(query)
+        idx = int(data.split('_')[1])
+        chap = context.user_data.get(f'chap_idx_{idx}')
+        if chap:
+            context.user_data['final_chapters'] = [chap]
+            await ask_time(query)
+        else:
+            await query.answer("⚠️ Please refresh menu", show_alert=True)
+
+    # 8. QUIZ SETTINGS & STATS
     elif data.startswith('time_'): context.user_data['quiz_time'] = int(data.split('_')[1]); await ask_count(query)
     elif data.startswith('count_'): context.user_data['quiz_count'] = int(data.split('_')[1]); await start_private_quiz(query, context)
     
@@ -771,6 +785,10 @@ async def master_callback_router(update: Update, context: ContextTypes.DEFAULT_T
         await safe_edit_message(query, txt, InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data='menu_settings')]]))
     elif data == 'req_admin': 
         await context.bot.send_message(OWNER_ID, f"User {query.from_user.id} requested admin."); await query.answer("Request Sent!")
+
+
+            
+
 
 # ==========================================
 # 8. MENU LOGIC FUNCTIONS
@@ -822,13 +840,15 @@ async def ask_source_menu(query, context, subject):
     ]
     await safe_edit_message(query, f"📂 <b>{real_sub} > Select Source:</b>", InlineKeyboardMarkup(btns))
 
-async def show_chapter_selection(query, context, multi):
-    cat, sub = context.user_data.get('quiz_cat'), context.user_data.get('quiz_sub')
+async def show_chapter_selection(query, context, multi, page=0):
+    cat = context.user_data.get('quiz_cat')
+    sub = context.user_data.get('quiz_sub')
+    
+    # Database Initialization Check
     if cat not in db["questions"] or sub not in db["questions"][cat]:
         if cat in db["questions"]: db["questions"][cat][sub] = {}
         save_db(db)
     
-    # Existing chapters fetch
     chapters = db["questions"][cat][sub]
     disp_sub = sub.split('-')[-1]
     is_yt = context.user_data.get('is_youtube_mode', False)
@@ -840,27 +860,65 @@ async def show_chapter_selection(query, context, multi):
     btns = []
     sel = context.user_data.get('selected_chapters', [])
     
-    # CHANGE: Sirf pehle 90 chapters dikhayega taaki crash na ho
-    # Aur callback data me naam short karke bhejege
-    all_chaps = list(chapters.items())[:90] 
+    # 1. SORTING & PAGINATION LOGIC
+    # Always sort keys to ensure index stays consistent
+    all_chaps = sorted(list(chapters.items()), key=lambda x: x[0]) 
     
-    for chap, qs in all_chaps:
+    ITEMS_PER_PAGE = 10 
+    total_items = len(all_chaps)
+    total_pages = (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+    
+    # Bounds check
+    if page < 0: page = 0
+    if page >= total_pages: page = total_pages - 1
+    
+    start_idx = page * ITEMS_PER_PAGE
+    end_idx = start_idx + ITEMS_PER_PAGE
+    current_page_chaps = all_chaps[start_idx:end_idx]
+    
+    # 2. GENERATE BUTTONS WITH INDEX MAPPING
+    for i, (chap, qs) in enumerate(current_page_chaps):
         count = len(qs)
-        safe_chap_cb = chap[:30] # Limit callback data length
+        global_idx = start_idx + i  # Unique ID for this chapter across all pages
+        
+        # SAVE MAPPING: Index -> Real Name (Crucial Step)
+        context.user_data[f'chap_idx_{global_idx}'] = chap
         
         if multi:
             icon = "✅" if chap in sel else "⬜"
-            # Button Text pura dikhega, lekin piche data short jayega
-            btns.append([InlineKeyboardButton(f"{icon} {chap} [{count}]", callback_data=f'tgl_{safe_chap_cb}')])
+            # Callback data is now short: tgl_0, tgl_1, etc.
+            btns.append([InlineKeyboardButton(f"{icon} {chap} [{count}]", callback_data=f'tgl_{global_idx}')])
         else:
             icon = "▶️" if is_yt else "📄"
-            btns.append([InlineKeyboardButton(f"{icon} {chap} [{count}]", callback_data=f'sng_{safe_chap_cb}')])
+            # Callback data is now short: sng_0, sng_1, etc.
+            btns.append([InlineKeyboardButton(f"{icon} {chap} [{count}]", callback_data=f'sng_{global_idx}')])
             
-    if multi: btns.append([InlineKeyboardButton(f"🚀 Start ({len(sel)})", callback_data='confirm_mix')])
+    # 3. NAVIGATION BUTTONS
+    pag_btns = []
+    mode_prefix = 'mix' if multi else 'sng' # Used in master_callback_router to route pagination
+    
+    if page > 0:
+        pag_btns.append(InlineKeyboardButton("⬅️ Prev", callback_data=f'pg_{mode_prefix}_{page-1}'))
+    
+    # Center Indicator
+    pag_btns.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data='noop'))
+    
+    if page < total_pages - 1:
+        pag_btns.append(InlineKeyboardButton("Next ➡️", callback_data=f'pg_{mode_prefix}_{page+1}'))
+    
+    if len(all_chaps) > ITEMS_PER_PAGE:
+        btns.append(pag_btns)
+            
+    # 4. ACTION BUTTONS
+    if multi: 
+        btns.append([InlineKeyboardButton(f"🚀 Start Quiz ({len(sel)})", callback_data='confirm_mix')])
+        
     btns.append([InlineKeyboardButton("⬅️ Back", callback_data='main_menu')])
     
-    await safe_edit_message(query, f"<b>Select {'Channel' if is_yt else 'Chapter'} ({disp_sub})</b>", InlineKeyboardMarkup(btns))
-    
+    title = f"<b>Select {'Channel' if is_yt else 'Chapter'} ({disp_sub})</b>"
+    await safe_edit_message(query, title, InlineKeyboardMarkup(btns))
+
+
             
 async def ask_time(query):
     btns = [InlineKeyboardButton(f"{t}s", callback_data=f"time_{t}") for t in [15, 30, 45, 60]]
