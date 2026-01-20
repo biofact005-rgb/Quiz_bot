@@ -832,19 +832,60 @@ async def handle_poll_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     q_data = {"question": poll.question, "options": [o.text for o in poll.options], "correct": poll.correct_option_id}
     db["questions"][cat][sub][chap].append(q_data); save_db(db); await update.message.reply_text("✅ Saved!")
 
+
+
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     doc = update.message.document
+    
+    # Database/Backup Restore Logic
     if user_id == OWNER_ID and (doc.file_name == 'database.json' or doc.file_name == 'backup.json'):
-        f = await doc.get_file(); await f.download_to_drive(DB_FILE); global db; db = load_db(); await update.message.reply_text("♻️ DB Restored!")
+        f = await doc.get_file()
+        await f.download_to_drive(DB_FILE)
+        global db
+        db = load_db()
+        await update.message.reply_text("♻️ DB Restored!")
         return
+
+    # Text File Upload Logic (Questions Add karna)
     if is_admin(user_id) and doc.file_name.endswith('.txt'):
-        f = await doc.get_file(); content = await f.download_as_bytearray(); text_data = content.decode('utf-8')
-        cat, sub = context.user_data.get('adm_cat'), context.user_data.get('adm_sub')
-        if not cat or not sub: await update.message.reply_text("⚠️ Select Subject First!"); return
-        cur_chap = "General"; count = 0
+        f = await doc.get_file()
+        content = await f.download_as_bytearray()
+        text_data = content.decode('utf-8')
         
-        save_db(db); await update.message.reply_text(f"✅ {count} Imported!")
+        cat, sub = context.user_data.get('adm_cat'), context.user_data.get('adm_sub')
+        if not cat or not sub: 
+            await update.message.reply_text("⚠️ Select Subject First!")
+            return
+            
+        cur_chap = "General"
+        count = 0
+        
+        # YEH HAI WO LOOP JO SAHI JAGAH HONA CHAHIYE
+        for line in text_data.split('\n'):
+            line = line.strip()
+            if not line: continue
+            
+            # Chapter detect karna aur naam chhota karna
+            if line.lower().startswith('chapter:'): 
+                raw_chap = line.split(':', 1)[1].strip()
+                cur_chap = raw_chap[:30]  # Crash fix: Limit name to 30 chars
+                continue
+            
+            # Question parse karna
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) >= 6:
+                try:
+                    q = {"question": parts[0], "options": parts[1:5], "correct": int(parts[-1])-1}
+                    if cur_chap not in db["questions"][cat][sub]: 
+                        db["questions"][cat][sub][cur_chap] = []
+                    db["questions"][cat][sub][cur_chap].append(q)
+                    count += 1
+                except: pass
+                
+        save_db(db)
+        await update.message.reply_text(f"✅ {count} Questions Imported!")
+
 
 async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get('quiz_active'):
@@ -859,30 +900,20 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID: return
     try:
-        if not context.args: await update.message.reply_text("❌ Usage: /removeadmin <user_id>"); return
+        if not context.args: 
+            await update.message.reply_text("❌ Usage: /removeadmin <user_id>")
+            return
+        
         target_id = int(context.args[0])
         if target_id in db["admins"]:
-                    # Is loop ko replace karein handle_file_upload function me
-        for line in text_data.split('\n'):
-            line = line.strip()
-            if not line: continue
-            if line.lower().startswith('chapter:'): 
-                # CHANGE: Naam ko 30 characters tak limit kiya taaki button crash na ho
-                raw_chap = line.split(':', 1)[1].strip()
-                cur_chap = raw_chap[:30] 
-                continue
-            
-            parts = [p.strip() for p in line.split('|')]
-            if len(parts) >= 6:
-                try:
-                    q = {"question": parts[0], "options": parts[1:5], "correct": int(parts[-1])-1}
-                    if cur_chap not in db["questions"][cat][sub]: db["questions"][cat][sub][cur_chap] = []
-                    db["questions"][cat][sub][cur_chap].append(q); count += 1
-                except: pass
-                    db["admins"].remove(target_id); save_db(db)
+            db["admins"].remove(target_id)
+            save_db(db)
             await update.message.reply_text(f"✅ User ID {target_id} removed.")
-        else: await update.message.reply_text("⚠️ User not in admin list.")
-    except ValueError: await update.message.reply_text("❌ Invalid ID.")
+        else:
+            await update.message.reply_text("⚠️ User not in admin list.")
+    except ValueError:
+        await update.message.reply_text("❌ Invalid ID.")
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type == 'private':
