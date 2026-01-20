@@ -442,25 +442,38 @@ async def handle_admin(update, context):
         await safe_edit_message(query, "📂 <b>BSEB > Select Subject:</b>", InlineKeyboardMarkup(btns))
         return
 
-    if data.startswith('adm_deep_'):
-        sub = data.split('_')[2] 
-        if sub == "Hindi":
-            opts = ["Hindi-Gadya", "Hindi-Padya", "Hindi-Grammar", "Hindi-PYQ", "Hindi-YouTube"]
-        elif sub == "English":
-            opts = ["English-Prose", "English-Poetry", "English-Grammar", "English-PYQ", "English-YouTube"]
+    # Is block ko replace karein handle_admin function me
+    if data.startswith(('del_sub_', 'adm_sub_')):
+        mode = 'del' if 'del' in data else 'adm'
+        sub = data.replace(f'{mode}_sub_', ''); context.user_data[f'{mode}_sub'] = sub
+        cat = context.user_data.get(f'{mode}_cat', 'BSEB') 
+        context.user_data[f'{mode}_cat'] = cat 
+        
+        # Get all chapters
+        all_keys = list(db["questions"].get(cat, {}).get(sub, {}).keys())
+        # CHANGE: Sirf pehle 50 items dikhayega taaki menu open ho sake
+        chaps = all_keys[:50]
+        
+        if mode == 'del':
+            # Delete wale me short name callback use karenge
+            btns = [[InlineKeyboardButton(f"❌ {c}", callback_data=f'del_chap_{c[:30]}')] for c in chaps]
+            btns.append([InlineKeyboardButton("Back", callback_data='menu_admin')])
+            await safe_edit_message(query, "🗑️ <b>Select Item to DELETE (First 50):</b>", InlineKeyboardMarkup(btns))
         else:
-            opts = [sub, f"{sub}-PYQ", f"{sub}-YouTube"]
+            btns = [[InlineKeyboardButton(c, callback_data=f'adm_chap_{c[:30]}')] for c in chaps]
+            btns.append([InlineKeyboardButton("➕ Add New", callback_data='adm_new_chap')])
             
-        btns = []
-        for o in opts:
-            label = o
-            if o == sub: label = f"{sub} (Book)" 
-            btns.append([InlineKeyboardButton(label, callback_data=f'adm_sub_{o}')])
+            back_data = 'menu_admin'
+            if cat == 'BSEB':
+                 base_sub = sub.split('-')[0]
+                 back_data = f'adm_deep_{base_sub}'
+            btns.append([InlineKeyboardButton("Back", callback_data=back_data)])
             
-        btns.append([InlineKeyboardButton("Back", callback_data='adm_main_BSEB')])
-        await safe_edit_message(query, f"📂 <b>{sub} > Select Type:</b>", InlineKeyboardMarkup(btns))
+            await safe_edit_message(query, f"📂 <b>{sub} > Items (First 50):</b>", InlineKeyboardMarkup(btns))
         return
+        
 
+    
     if data == 'view_admin_list':
         msg = "👮‍♂️ <b>Admin List:</b>\nLoading details..."
         await safe_edit_message(query, msg, None)
@@ -478,7 +491,7 @@ async def handle_admin(update, context):
         await safe_edit_message(query, "📤 <b>Send database.json:</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data='menu_owner')]]))
         return
     if data == 'adm_broadcast_prompt':
-        await safe_edit_message(query, "📢 <b>Send broadcast message:</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data='menu_admin')]]))
+        await safe_edit_message(query, "📢 <b>Send broadcast message:</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callbak_data='menu_admin')]]))
         context.user_data['awaiting_broadcast_msg'] = True
         return
 
@@ -724,6 +737,8 @@ async def show_chapter_selection(query, context, multi):
     if cat not in db["questions"] or sub not in db["questions"][cat]:
         if cat in db["questions"]: db["questions"][cat][sub] = {}
         save_db(db)
+    
+    # Existing chapters fetch
     chapters = db["questions"][cat][sub]
     disp_sub = sub.split('-')[-1]
     is_yt = context.user_data.get('is_youtube_mode', False)
@@ -731,20 +746,32 @@ async def show_chapter_selection(query, context, multi):
     if not chapters: 
         await query.answer(f"⚠️ No {'Channels' if is_yt else 'Chapters'} available!", show_alert=True)
         return
+        
     btns = []
     sel = context.user_data.get('selected_chapters', [])
-    for chap, qs in chapters.items():
+    
+    # CHANGE: Sirf pehle 90 chapters dikhayega taaki crash na ho
+    # Aur callback data me naam short karke bhejege
+    all_chaps = list(chapters.items())[:90] 
+    
+    for chap, qs in all_chaps:
         count = len(qs)
+        safe_chap_cb = chap[:30] # Limit callback data length
+        
         if multi:
             icon = "✅" if chap in sel else "⬜"
-            btns.append([InlineKeyboardButton(f"{icon} {chap} [{count}]", callback_data=f'tgl_{chap}')])
+            # Button Text pura dikhega, lekin piche data short jayega
+            btns.append([InlineKeyboardButton(f"{icon} {chap} [{count}]", callback_data=f'tgl_{safe_chap_cb}')])
         else:
             icon = "▶️" if is_yt else "📄"
-            btns.append([InlineKeyboardButton(f"{icon} {chap} [{count}]", callback_data=f'sng_{chap}')])
+            btns.append([InlineKeyboardButton(f"{icon} {chap} [{count}]", callback_data=f'sng_{safe_chap_cb}')])
+            
     if multi: btns.append([InlineKeyboardButton(f"🚀 Start ({len(sel)})", callback_data='confirm_mix')])
     btns.append([InlineKeyboardButton("⬅️ Back", callback_data='main_menu')])
+    
     await safe_edit_message(query, f"<b>Select {'Channel' if is_yt else 'Chapter'} ({disp_sub})</b>", InlineKeyboardMarkup(btns))
-
+    
+            
 async def ask_time(query):
     btns = [InlineKeyboardButton(f"{t}s", callback_data=f"time_{t}") for t in [15, 30, 45, 60]]
     await safe_edit_message(query, "⏱️ <b>Per Question Time:</b>", InlineKeyboardMarkup([btns, [InlineKeyboardButton("Cancel", callback_data='main_menu')]]))
@@ -816,17 +843,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         cat, sub = context.user_data.get('adm_cat'), context.user_data.get('adm_sub')
         if not cat or not sub: await update.message.reply_text("⚠️ Select Subject First!"); return
         cur_chap = "General"; count = 0
-        for line in text_data.split('\n'):
-            line = line.strip()
-            if not line: continue
-            if line.lower().startswith('chapter:'): cur_chap = line.split(':', 1)[1].strip(); continue
-            parts = [p.strip() for p in line.split('|')]
-            if len(parts) >= 6:
-                try:
-                    q = {"question": parts[0], "options": parts[1:5], "correct": int(parts[-1])-1}
-                    if cur_chap not in db["questions"][cat][sub]: db["questions"][cat][sub][cur_chap] = []
-                    db["questions"][cat][sub][cur_chap].append(q); count += 1
-                except: pass
+        
         save_db(db); await update.message.reply_text(f"✅ {count} Imported!")
 
 async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -845,7 +862,24 @@ async def remove_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
         if not context.args: await update.message.reply_text("❌ Usage: /removeadmin <user_id>"); return
         target_id = int(context.args[0])
         if target_id in db["admins"]:
-            db["admins"].remove(target_id); save_db(db)
+                    # Is loop ko replace karein handle_file_upload function me
+        for line in text_data.split('\n'):
+            line = line.strip()
+            if not line: continue
+            if line.lower().startswith('chapter:'): 
+                # CHANGE: Naam ko 30 characters tak limit kiya taaki button crash na ho
+                raw_chap = line.split(':', 1)[1].strip()
+                cur_chap = raw_chap[:30] 
+                continue
+            
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) >= 6:
+                try:
+                    q = {"question": parts[0], "options": parts[1:5], "correct": int(parts[-1])-1}
+                    if cur_chap not in db["questions"][cat][sub]: db["questions"][cat][sub][cur_chap] = []
+                    db["questions"][cat][sub][cur_chap].append(q); count += 1
+                except: pass
+                    db["admins"].remove(target_id); save_db(db)
             await update.message.reply_text(f"✅ User ID {target_id} removed.")
         else: await update.message.reply_text("⚠️ User not in admin list.")
     except ValueError: await update.message.reply_text("❌ Invalid ID.")
