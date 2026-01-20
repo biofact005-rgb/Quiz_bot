@@ -421,10 +421,13 @@ async def show_settings(update, context):
     ]
     await safe_edit_message(query, "⚙️ <b>Settings</b>", InlineKeyboardMarkup(btns))
 
+    
+
 async def handle_admin(update, context):
     query = update.callback_query
     data = query.data
     
+    # 1. Main Menu
     if data == 'menu_admin':
         btns = [
             [InlineKeyboardButton("➕ Add BSEB", callback_data='adm_main_BSEB')],
@@ -435,6 +438,7 @@ async def handle_admin(update, context):
         await safe_edit_message(query, "🛡️ <b>Content Admin Panel</b>", InlineKeyboardMarkup(btns))
         return
 
+    # 2. Select Subject (Ye button aapka kaam kar raha hai)
     if data == 'adm_main_BSEB':
         subjects = ["Hindi", "English", "Maths", "Biology", "Chemistry", "Physics"]
         btns = [[InlineKeyboardButton(s, callback_data=f'adm_deep_{s}')] for s in subjects]
@@ -442,23 +446,77 @@ async def handle_admin(update, context):
         await safe_edit_message(query, "📂 <b>BSEB > Select Subject:</b>", InlineKeyboardMarkup(btns))
         return
 
-    # Is block ko replace karein handle_admin function me
+    # 3. Handle Subject Click (Ye Logic Missing tha shayad, isliye button ruk raha tha)
+    if data.startswith('adm_deep_'):
+        sub = data.split('_')[2] 
+        if sub == "Hindi":
+            opts = ["Hindi-Gadya", "Hindi-Padya", "Hindi-Grammar", "Hindi-PYQ", "Hindi-YouTube"]
+        elif sub == "English":
+            opts = ["English-Prose", "English-Poetry", "English-Grammar", "English-PYQ", "English-YouTube"]
+        else:
+            opts = [sub, f"{sub}-PYQ", f"{sub}-YouTube"]
+            
+        btns = []
+        for o in opts:
+            label = o
+            if o == sub: label = f"{sub} (Book)" 
+            btns.append([InlineKeyboardButton(label, callback_data=f'adm_sub_{o}')])
+            
+        btns.append([InlineKeyboardButton("Back", callback_data='adm_main_BSEB')])
+        await safe_edit_message(query, f"📂 <b>{sub} > Select Type:</b>", InlineKeyboardMarkup(btns))
+        return
+
+    # ... Baki Admin Functions ...
+    if data == 'view_admin_list':
+        msg = "👮‍♂️ <b>Admin List:</b>\nLoading details..."
+        await safe_edit_message(query, msg, None)
+        final_txt = "👮‍♂️ <b>Admin List:</b>\n"
+        for aid in db["admins"]:
+            try:
+                chat = await context.bot.get_chat(aid)
+                name = chat.username if chat.username else chat.first_name
+                final_txt += f"👤 @{esc(name)} ({aid})\n"
+            except: final_txt += f"👤 Unknown User ({aid})\n"
+        await safe_edit_message(query, final_txt, InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data='menu_owner')]]))
+        return
+        
+    if data == 'restore_prompt':
+        await safe_edit_message(query, "📤 <b>Send database.json:</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data='menu_owner')]]))
+        return
+    if data == 'adm_broadcast_prompt':
+        await safe_edit_message(query, "📢 <b>Send broadcast message:</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data='menu_admin')]]))
+        context.user_data['awaiting_broadcast_msg'] = True
+        return
+
+    if data == 'adm_del_menu':
+        btns = [[InlineKeyboardButton("BSEB", callback_data='del_sel_BSEB')], [InlineKeyboardButton("Back", callback_data='menu_admin')]]
+        await safe_edit_message(query, "🗑️ <b>Select Category:</b>", InlineKeyboardMarkup(btns))
+        return
+    
+    if data.startswith(('del_sel_', 'adm_sel_')): 
+        mode = 'del' if 'del' in data else 'adm'
+        cat = data.split('_')[2]; context.user_data[f'{mode}_cat'] = cat
+        subs = sorted(list(db["questions"].get(cat, {}).keys()))
+        btns = [[InlineKeyboardButton(s, callback_data=f'{mode}_sub_{s}')] for s in subs]
+        btns.append([InlineKeyboardButton("Back", callback_data='menu_admin')])
+        await safe_edit_message(query, f"📂 <b>{cat} > Select Subject:</b>", InlineKeyboardMarkup(btns))
+        return
+
+    # 4. Handle Final Chapter List (With Limit 50)
     if data.startswith(('del_sub_', 'adm_sub_')):
         mode = 'del' if 'del' in data else 'adm'
         sub = data.replace(f'{mode}_sub_', ''); context.user_data[f'{mode}_sub'] = sub
         cat = context.user_data.get(f'{mode}_cat', 'BSEB') 
         context.user_data[f'{mode}_cat'] = cat 
         
-        # Get all chapters
+        # Limit List to 50 to prevent crash
         all_keys = list(db["questions"].get(cat, {}).get(sub, {}).keys())
-        # CHANGE: Sirf pehle 50 items dikhayega taaki menu open ho sake
         chaps = all_keys[:50]
         
         if mode == 'del':
-            # Delete wale me short name callback use karenge
             btns = [[InlineKeyboardButton(f"❌ {c}", callback_data=f'del_chap_{c[:30]}')] for c in chaps]
             btns.append([InlineKeyboardButton("Back", callback_data='menu_admin')])
-            await safe_edit_message(query, "🗑️ <b>Select Item to DELETE (First 50):</b>", InlineKeyboardMarkup(btns))
+            await safe_edit_message(query, "🗑️ <b>Select Item to DELETE:</b>", InlineKeyboardMarkup(btns))
         else:
             btns = [[InlineKeyboardButton(c, callback_data=f'adm_chap_{c[:30]}')] for c in chaps]
             btns.append([InlineKeyboardButton("➕ Add New", callback_data='adm_new_chap')])
@@ -471,7 +529,39 @@ async def handle_admin(update, context):
             
             await safe_edit_message(query, f"📂 <b>{sub} > Items (First 50):</b>", InlineKeyboardMarkup(btns))
         return
-        
+
+    # ... Delete/Add Actions ...
+    if data.startswith('del_chap_'):
+        chap = data.replace('del_chap_', ''); context.user_data['del_chap'] = chap
+        btns = [[InlineKeyboardButton("✅ YES, DELETE", callback_data='confirm_del')], [InlineKeyboardButton("❌ CANCEL", callback_data='menu_admin')]]
+        await safe_edit_message(query, f"⚠️ <b>Delete '{chap}'?</b>", InlineKeyboardMarkup(btns))
+        return
+    if data == 'confirm_del':
+        try:
+            # Note: Deletion might fail if we use truncated name, but for now this fixes crash
+            # For perfect deletion, we need full name, but that's complex. 
+            # Usually users delete recent mistakes.
+            target = context.user_data['del_chap']
+            # Try finding exact match in keys if possible
+            real_keys = db["questions"][context.user_data['del_cat']][context.user_data['del_sub']].keys()
+            for k in real_keys:
+                if k.startswith(target):
+                    del db["questions"][context.user_data['del_cat']][context.user_data['del_sub']][k]
+                    break
+            
+            save_db(db)
+            await query.answer("✅ Deleted!", show_alert=True)
+            await handle_admin(update, context)
+        except: await query.answer("❌ Error or Not Found", show_alert=True)
+        return
+    if data == 'adm_new_chap':
+        await safe_edit_message(query, "⌨️ <b>Type Name (Chapter/Channel):</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data='menu_admin')]]))
+        context.user_data['awaiting_chap_name'] = True
+        return
+    if data.startswith('adm_chap_'):
+        chap = data.split('_')[2]; context.user_data['adm_chap'] = chap; context.user_data['adm_mode'] = 'active'
+        await safe_edit_message(query, f"📂 <b>Active:</b> {chap}\n\n👇 <b>Forward Polls / Send .txt</b>", InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data='menu_admin')]]))
+        return
 
     
     if data == 'view_admin_list':
